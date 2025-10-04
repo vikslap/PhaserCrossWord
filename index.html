@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Crossword</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      /* Page & layout styles */
+      body {
+        margin: 0;
+        font-family: Inter, Arial, sans-serif;
+        background: #071322;
+        color: #e6eef6;
+      }
+      .wrap {
+        display: flex;
+        gap: 14px;
+        padding: 16px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      #game {
+        background: linear-gradient(180deg, #06121a, #03202a);
+        padding: 12px;
+        border-radius: 8px;
+        box-sizing: border-box;
+      }
+      #game canvas {
+        width: 100% !important;
+        height: auto !important;
+        display: block;
+      }
+      #ui {
+        width: 360px;
+        min-width: 260px;
+      }
+      .panel {
+        background: #071724;
+        padding: 12px;
+        border-radius: 8px;
+      }
+      ol {
+        padding-left: 18px;
+        margin: 8px 0;
+        color: #9aa6b2;
+      }
+      li {
+        margin: 6px 0;
+        cursor: pointer;
+      }
+      li.active {
+        color: #fff;
+        background: rgba(255, 216, 107, 0.06);
+        padding: 4px;
+        border-radius: 4px;
+      }
+      .controls {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }
+      .controls button {
+        background: #0b1320;
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        color: #cbd5e1;
+        padding: 8px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button.primary {
+        background: linear-gradient(90deg, #ffd86b, #ffb85c);
+        color: #071018;
+        border: none;
+      }
+      #msg {
+        height: 20px;
+        margin-top: 8px;
+        color: #a6f0b3;
+      }
+      .hint {
+        margin-top: 8px;
+        color: #9aa6b2;
+        font-size: 13px;
+      }
+      .continue-btn-container {
+        text-align: center;
+        margin-top: 14px;
+      }
+      .continue-btn {
+        display: none;
+        background: linear-gradient(90deg, #4ade80, #16a34a);
+        color: #fff;
+        border: none;
+        padding: 12px 24px;
+        font-size: 1rem;
+        border-radius: 8px;
+        cursor: pointer;
+        opacity: 0;
+        transition: transform 0.2s, box-shadow 0.2s, opacity 0.25s;
+      }
+      .continue-btn.fade-in {
+        animation: fadeInUp 0.36s ease forwards;
+      }
+      @keyframes fadeInUp {
+        from {
+          opacity: 0;
+          transform: translateY(8px) scale(0.99);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      @media (max-width: 768px) {
+        .controls {
+          justify-content: center;
+        }
+        #ui {
+          width: 92%;
+          max-width: 420px;
+          margin: 0 auto;
+        }
+        #game {
+          width: 92%;
+          max-width: 680px;
+        }
+      }
+      @media (max-width: 480px) {
+        body {
+          padding: 6px;
+        }
+        .hint {
+          font-size: 12px;
+          text-align: center;
+        }
+        .continue-btn {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="wrap">
+      <div id="game"></div>
+
+      <div id="ui">
+        <h2 style="margin: 0 0 8px 0">Crossword</h2>
+        <p>test</p>
+        <div class="panel">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
+            <div>
+              <strong>Across</strong>
+              <ol id="acrossList"></ol>
+            </div>
+            <div>
+              <strong>Down</strong>
+              <ol id="downList"></ol>
+            </div>
+          </div>
+
+          <!-- Only controls we keep: toggle direction and a small message area -->
+          <div class="controls">
+            <button id="toggleDir">Toggle Dir (Space)</button>
+          </div>
+
+          <div id="msg"></div>
+          <div class="hint">
+            Click a cell, type letters (A–Z). Arrow keys move. Space toggles
+            across/down. Words auto-validate when filled.
+          </div>
+
+          <!-- Continue button: hidden until puzzle solved -->
+          <div class="continue-btn-container">
+            <button id="nextBtn" class="continue-btn" aria-hidden="true">
+              Continue
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phaser 3 (CDN) -->
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+
+    <script>
+      /*****************************************************************************
+       * Compact & documented crossword
+       *
+       * - Gray-locks any cell that is not covered by a clue at startup (non-interactive)
+       * - Auto-validates a word (green/red) when its last letter is entered
+       * - Persists progress in localStorage
+       * - Shows Continue button when entire puzzle is correct
+       *****************************************************************************/
+
+      /* -------------------------
+         Puzzle data (grid & clues)
+         ------------------------- */
+      const solutionGrid = [
+        "ENCRYPT###",
+        "#####E####",
+        "DDOS#N#F##",
+        "##U##D#T##",
+        "##DECRYPT#",
+        "#####I##R#",
+        "##D##V##O#",
+        "#HACKER#J#",
+        "##T#####A#",
+        "##A#####N#",
+      ];
+
+      // across clues: id -> {r,c,len,clue,answer}
+      const acrossClues = {
+        1: {
+          r: 0,
+          c: 0,
+          len: 7,
+          clue: "Turn data into unreadable form.",
+          answer: "ENCRYPT",
+        },
+        2: {
+          r: 2,
+          c: 0,
+          len: 4,
+          clue: "Distributed network attack (abbr.).",
+          answer: "DDOS",
+        },
+        3: {
+          r: 4,
+          c: 2,
+          len: 7,
+          clue: "Opposite of encrypt.",
+          answer: "DECRYPT",
+        },
+        4: {
+          r: 7,
+          c: 1,
+          len: 6,
+          clue: "Someone who breaks into systems.",
+          answer: "HACKER",
+        },
+      };
+
+      // down clues
+      const downClues = {
+        5: {
+          r: 0,
+          c: 5,
+          len: 8,
+          clue: "Portable USB storage (two words joined).",
+          answer: "PENDRIVE",
+        },
+        6: {
+          r: 2,
+          c: 7,
+          len: 3,
+          clue: "File Transfer Protocol.",
+          answer: "FTP",
+        },
+        7: {
+          r: 4,
+          c: 8,
+          len: 6,
+          clue: "Malware that hides in files (6).",
+          answer: "TROJAN",
+        },
+      };
+
+      // constants
+      const ROWS = 10,
+        COLS = 10;
+      const STORAGE_KEY = "image_crossword_fixed_v1"; // localStorage key
+      let crosswordSolved = false; // tracks puzzle completion
+
+      /* -------------------------
+         Phaser Scene (main game)
+         ------------------------- */
+      class CrosswordScene extends Phaser.Scene {
+        constructor() {
+          super({ key: "CrosswordScene" });
+        }
+
+        create() {
+          // determine tile size responsively
+          const tile = window.innerWidth <= 420 ? 36 : 48;
+          const pad = Math.round(tile * 0.125);
+          this.tile = tile;
+          this.baseX = Math.max(12, (640 - COLS * tile) / 2); // x offset
+          this.baseY = 12; // y offset
+
+          // allocate cell storage and load saved progress
+          this.cells = Array.from({ length: ROWS }, () =>
+            Array(COLS).fill(null)
+          );
+          this.direction = "across"; // current typing direction
+          this.selected = { r: 0, c: 0 }; // currently selected cell
+          this.progress = this.loadProgress();
+
+          // build grid visuals & state objects
+          for (let r = 0; r < ROWS; r++) {
+            const rowStr = solutionGrid[r] || "#".repeat(COLS);
+            for (let c = 0; c < COLS; c++) {
+              const x = this.baseX + c * tile + tile / 2;
+              const y = this.baseY + r * tile + tile / 2;
+              const ch = rowStr[c] || "#";
+              const isBlocked = ch === "#";
+              const bg = isBlocked ? 0x374151 : 0xffffff; // blocked=gray else white
+              const rect = this.add
+                .rectangle(x, y, tile - pad, tile - pad, bg)
+                .setStrokeStyle(Math.max(1, Math.round(tile * 0.04)), 0x07121a);
+              if (!isBlocked) rect.setInteractive(); // initially interactive if not a true block
+              const text = this.add
+                .text(x, y, "", {
+                  font: `${Math.max(12, Math.round(tile * 0.42))}px monospace`,
+                  color: isBlocked ? "#0b1220" : "#000",
+                })
+                .setOrigin(0.5);
+
+              // restore saved letter if present
+              const saved =
+                this.progress && this.progress[r] && this.progress[r][c]
+                  ? this.progress[r][c]
+                  : "";
+              if (saved && !isBlocked) text.setText(saved);
+
+              // store cell object; locked can be null | 'correct' | 'wrong' | 'gray-locked'
+              this.cells[r][c] = {
+                rect,
+                text,
+                isBlocked,
+                solution: isBlocked ? null : rowStr[c] || "",
+                locked: null,
+              };
+            }
+          }
+
+          // Gray-lock any active cell that does NOT appear in any clue (makes it non-interactive)
+          this.markCellsNotInAnyClue();
+
+          // attach click handlers only to interactive cells (not gray-locked)
+          for (let r = 0; r < ROWS; r++)
+            for (let c = 0; c < COLS; c++) {
+              const cell = this.cells[r][c];
+              if (!cell.isBlocked && cell.locked !== "gray-locked")
+                cell.rect.on("pointerdown", () => this.selectCell(r, c));
+              else if (cell.rect.disableInteractive)
+                cell.rect.disableInteractive();
+            }
+
+          // auto-select first available cell (skips blocked/gray)
+          outer: for (let r = 0; r < ROWS; r++) {
+            for (let c = 0; c < COLS; c++) {
+              if (!this.isCellBlocked(r, c)) {
+                this.selectCell(r, c);
+                break outer;
+              }
+            }
+          }
+
+          // keyboard handling: letters, backspace, arrows, space toggle
+          this.input.keyboard.on("keydown", (evt) => {
+            const k = evt.key;
+            if (k === " ") {
+              evt.preventDefault();
+              this.toggleDirection();
+              return;
+            }
+            if (/^[a-zA-Z]$/.test(k)) {
+              this.putLetter(k.toUpperCase());
+              return;
+            }
+            if (k === "Backspace") {
+              this.backspace();
+              return;
+            }
+            if (k.startsWith("Arrow"))
+              this.moveSelection(k.replace("Arrow", "").toLowerCase());
+          });
+
+          // draw clue list in UI
+          this.renderClues();
+
+          // if saved progress already completes puzzle, finalize (gray-lock empties) and show Continue
+          this.checkPuzzleComplete();
+
+          // expose scene for debugging from console (optional)
+          window.crosswordScene = this;
+        } // end create()
+
+        /* -------------------------
+           Utility helpers
+           ------------------------- */
+
+        // Treat true blocks and gray-locked cells as blocked for navigation
+        isCellBlocked(r, c) {
+          const cell = this.cells[r] && this.cells[r][c];
+          if (!cell) return true;
+          return cell.isBlocked || cell.locked === "gray-locked";
+        }
+
+        // Mark any active cell not in any across/down clue as gray-locked (non-interactive)
+        markCellsNotInAnyClue() {
+          // coverage map for clues
+          const covered = Array.from({ length: ROWS }, () =>
+            Array(COLS).fill(false)
+          );
+          for (const id in acrossClues) {
+            const cl = acrossClues[id];
+            for (let i = 0; i < cl.len; i++) {
+              const r = cl.r,
+                c = cl.c + i;
+              if (covered[r]) covered[r][c] = true;
+            }
+          }
+          for (const id in downClues) {
+            const cl = downClues[id];
+            for (let i = 0; i < cl.len; i++) {
+              const r = cl.r + i,
+                c = cl.c;
+              if (covered[r]) covered[r][c] = true;
+            }
+          }
+
+          // load or create progress grid to persist any cleared letters
+          const cur =
+            this.loadProgress() ||
+            Array.from({ length: ROWS }, () => Array(COLS).fill(""));
+
+          for (let r = 0; r < ROWS; r++)
+            for (let c = 0; c < COLS; c++) {
+              const cell = this.cells[r][c];
+              if (!cell || cell.isBlocked) continue;
+              if (!covered[r][c]) {
+                // not covered by any clue -> gray-lock & clear any visible letter
+                cell.locked = "gray-locked";
+                cell.rect.setFillStyle(0x374151); // gray
+                cell.text.setText("");
+                cur[r][c] = "";
+              }
+            }
+
+          // persist changes so reload keeps gray-locked state
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(cur));
+            this.progress = cur;
+          } catch (e) {
+            /* ignore storage errors */
+          }
+        }
+
+        // Update UI clue lists and attach click handlers
+        renderClues() {
+          const aList = document.getElementById("acrossList"),
+            dList = document.getElementById("downList");
+          aList.innerHTML = "";
+          dList.innerHTML = "";
+          Object.keys(acrossClues)
+            .sort((a, b) => a - b)
+            .forEach((id) => {
+              const cl = acrossClues[id];
+              const li = document.createElement("li");
+              li.dataset.id = id;
+              li.textContent = `${id}. ${cl.clue} (${cl.len})`;
+              li.addEventListener("click", () => {
+                this.direction = "across";
+                this.selectCell(cl.r, cl.c);
+              });
+              aList.appendChild(li);
+            });
+          Object.keys(downClues)
+            .sort((a, b) => a - b)
+            .forEach((id) => {
+              const cl = downClues[id];
+              const li = document.createElement("li");
+              li.dataset.id = id;
+              li.textContent = `${id}. ${cl.clue} (${cl.len})`;
+              li.addEventListener("click", () => {
+                this.direction = "down";
+                this.selectCell(cl.r, cl.c);
+              });
+              dList.appendChild(li);
+            });
+          this.updateClueHighlight();
+        }
+
+        // Select a cell (ignore blocked/gray)
+        selectCell(r, c) {
+          if (this.isCellBlocked(r, c)) return;
+          this.selected = { r, c };
+          this.highlightActiveWord();
+          this.updateClueHighlight();
+        }
+
+        // Compute the cells forming the currently active word (based on direction)
+        getActiveWordCells() {
+          const { r, c } = this.selected;
+          const out = [];
+          if (this.direction === "across") {
+            let sc = c;
+            while (sc > 0 && !this.isCellBlocked(r, sc - 1)) sc--;
+            let ec = c;
+            while (ec < COLS && !this.isCellBlocked(r, ec)) ec++;
+            for (let cc = sc; cc < ec; cc++)
+              out.push({ r, c: cc, cell: this.cells[r][cc] });
+          } else {
+            let sr = r;
+            while (sr > 0 && !this.isCellBlocked(sr - 1, c)) sr--;
+            let er = r;
+            while (er < ROWS && !this.isCellBlocked(er, c)) er++;
+            for (let rr = sr; rr < er; rr++)
+              out.push({ r: rr, c, cell: this.cells[rr][c] });
+          }
+          return out;
+        }
+
+        // Reset colors then highlight the active word and selected cell
+        highlightActiveWord() {
+          this.clearHighlights();
+          const cells = this.getActiveWordCells();
+          cells.forEach(({ r, c }) => {
+            if (this.cells[r][c].locked === null)
+              this.cells[r][c].rect.setFillStyle(0xe8f3ff);
+          });
+          const s = this.selected;
+          if (
+            !this.isCellBlocked(s.r, s.c) &&
+            this.cells[s.r][s.c].locked === null
+          )
+            this.cells[s.r][s.c].rect.setFillStyle(0xfffbcc);
+        }
+
+        // Clear cell backgrounds according to their locked state
+        clearHighlights() {
+          for (let r = 0; r < ROWS; r++)
+            for (let c = 0; c < COLS; c++) {
+              const cell = this.cells[r][c];
+              if (!cell) continue;
+              if (cell.isBlocked || cell.locked === "gray-locked")
+                cell.rect.setFillStyle(0x374151);
+              else if (cell.locked === "correct")
+                cell.rect.setFillStyle(0xccffcc);
+              else if (cell.locked === "wrong")
+                cell.rect.setFillStyle(0xffcccc);
+              else cell.rect.setFillStyle(0xffffff);
+            }
+        }
+
+        // Update the active clue in the UI lists
+        updateClueHighlight() {
+          document
+            .querySelectorAll("#acrossList li, #downList li")
+            .forEach((li) => li.classList && li.classList.remove("active"));
+          const cells = this.getActiveWordCells();
+          if (!cells.length) return;
+          const start = cells[0];
+          if (this.direction === "across") {
+            for (const id in acrossClues) {
+              const cl = acrossClues[id];
+              if (
+                cl.r === start.r &&
+                cl.c === start.c &&
+                cl.len === cells.length
+              ) {
+                const el = document.querySelector(
+                  `#acrossList li[data-id="${id}"]`
+                );
+                if (el) el.classList.add("active");
+                break;
+              }
+            }
+          } else {
+            for (const id in downClues) {
+              const cl = downClues[id];
+              if (
+                cl.r === start.r &&
+                cl.c === start.c &&
+                cl.len === cells.length
+              ) {
+                const el = document.querySelector(
+                  `#downList li[data-id="${id}"]`
+                );
+                if (el) el.classList.add("active");
+                break;
+              }
+            }
+          }
+        }
+
+        // Toggle typing direction
+        toggleDirection() {
+          this.direction = this.direction === "across" ? "down" : "across";
+          this.highlightActiveWord();
+          this.updateClueHighlight();
+          this.showMsg(`Direction: ${this.direction.toUpperCase()}`, 900);
+        }
+
+        // Place a letter into the selected cell, save it and auto-advance
+        putLetter(letter) {
+          const { r, c } = this.selected;
+          if (this.isCellBlocked(r, c)) return;
+          const cell = this.cells[r][c];
+          // clear any previous correctness lock for the whole word before editing
+          const wordCells = this.getActiveWordCells();
+          this.clearLocksForCells(wordCells);
+          cell.text.setText(letter); // display letter
+          this.saveLetter(r, c, letter); // persist and trigger validation
+          // move to next cell in the same direction (skipping blocked/gray)
+          if (this.direction === "across") {
+            let nc = c + 1;
+            while (nc < COLS && this.isCellBlocked(r, nc)) nc++;
+            if (nc < COLS) this.selectCell(r, nc);
+          } else {
+            let nr = r + 1;
+            while (nr < ROWS && this.isCellBlocked(nr, c)) nr++;
+            if (nr < ROWS) this.selectCell(nr, c);
+          }
+        }
+
+        // Remove current letter (or move back if empty)
+        backspace() {
+          const { r, c } = this.selected;
+          if (this.isCellBlocked(r, c)) return;
+          const cell = this.cells[r][c];
+          const wordCells = this.getActiveWordCells();
+          this.clearLocksForCells(wordCells);
+          if (cell.text.text) {
+            cell.text.setText("");
+            this.saveLetter(r, c, "");
+          } else {
+            if (this.direction === "across") {
+              let nc = c - 1;
+              while (nc >= 0 && this.isCellBlocked(r, nc)) nc--;
+              if (nc >= 0) this.selectCell(r, nc);
+            } else {
+              let nr = r - 1;
+              while (nr >= 0 && this.isCellBlocked(nr, c)) nr--;
+              if (nr >= 0) this.selectCell(nr, c);
+            }
+          }
+        }
+
+        // Clear 'correct'/'wrong' locks for cells (but not gray-locked)
+        clearLocksForCells(cells) {
+          cells.forEach(({ r, c }) => {
+            if (
+              this.cells[r][c].locked !== null &&
+              this.cells[r][c].locked !== "gray-locked"
+            ) {
+              this.cells[r][c].locked = null;
+              this.cells[r][c].rect.setFillStyle(0xffffff);
+            }
+          });
+        }
+
+        // Called when the active word becomes fully filled: check correctness & lock color
+        checkActiveWordOnCompletion() {
+          const cells = this.getActiveWordCells();
+          if (!cells.length) return;
+          let entered = "",
+            allFilled = true;
+          cells.forEach(({ r, c }) => {
+            const ch = (this.cells[r][c].text.text || "").trim();
+            entered += ch;
+            if (!ch) allFilled = false;
+          });
+          if (!allFilled) {
+            this.clearLocksForCells(cells);
+            this.highlightActiveWord();
+            return;
+          }
+
+          // find the matching clue for this word (start position & length)
+          const start = cells[0];
+          let clue = null;
+          if (this.direction === "across")
+            clue = Object.values(acrossClues).find(
+              (cl) =>
+                cl.r === start.r && cl.c === start.c && cl.len === cells.length
+            );
+          else
+            clue = Object.values(downClues).find(
+              (cl) =>
+                cl.r === start.r && cl.c === start.c && cl.len === cells.length
+            );
+          if (!clue) return; // word not defined as a clue
+
+          // lock cells green if correct, red if incorrect
+          if (entered.toUpperCase() === clue.answer.toUpperCase()) {
+            cells.forEach(({ r, c }) => {
+              this.cells[r][c].locked = "correct";
+              this.cells[r][c].rect.setFillStyle(0xccffcc);
+            });
+          } else {
+            cells.forEach(({ r, c }) => {
+              this.cells[r][c].locked = "wrong";
+              this.cells[r][c].rect.setFillStyle(0xffcccc);
+            });
+          }
+
+          // after checking a word, check full puzzle for completion
+          this.checkPuzzleComplete();
+        }
+
+        // When the whole puzzle is complete: gray-lock any empty cells and persist final state
+        finalizeCompletedPuzzle() {
+          const cur =
+            this.loadProgress() ||
+            Array.from({ length: ROWS }, () => Array(COLS).fill(""));
+          for (let r = 0; r < ROWS; r++)
+            for (let c = 0; c < COLS; c++) {
+              const cell = this.cells[r][c];
+              if (!cell || cell.isBlocked) continue;
+              const current = (cell.text.text || "").trim();
+              if (!current) {
+                // empty -> gray-lock and keep letter hidden
+                cell.locked = "gray-locked";
+                cell.rect.setFillStyle(0x374151);
+                cur[r][c] = "";
+                if (cell.rect.disableInteractive)
+                  cell.rect.disableInteractive();
+              } else {
+                // has letter -> mark correct and persist
+                cell.locked = "correct";
+                cell.rect.setFillStyle(0xccffcc);
+                cur[r][c] = current;
+              }
+            }
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(cur));
+          } catch (e) {
+            /* ignore */
+          }
+        }
+
+        // Check if full puzzle is solved (silent check) and toggle Continue button + finalize if solved
+        checkPuzzleComplete() {
+          let allOk = true;
+          // across validation
+          for (const id in acrossClues) {
+            const cl = acrossClues[id];
+            let entered = "";
+            for (let i = 0; i < cl.len; i++) {
+              const r = cl.r,
+                c = cl.c + i;
+              entered += this.cells[r][c].text.text || "";
+            }
+            if (entered.toUpperCase() !== cl.answer.toUpperCase()) {
+              allOk = false;
+              break;
+            }
+          }
+          // down validation only if across all ok
+          if (allOk) {
+            for (const id in downClues) {
+              const cl = downClues[id];
+              let entered = "";
+              for (let i = 0; i < cl.len; i++) {
+                const r = cl.r + i,
+                  c = cl.c;
+                entered += this.cells[r][c].text.text || "";
+              }
+              if (entered.toUpperCase() !== cl.answer.toUpperCase()) {
+                allOk = false;
+                break;
+              }
+            }
+          }
+
+          // update global flag and Continue button visibility
+          crosswordSolved = allOk;
+          const nextBtn = document.getElementById("nextBtn");
+          if (nextBtn) {
+            if (crosswordSolved) {
+              // finalize and show
+              this.finalizeCompletedPuzzle();
+              nextBtn.style.display = "inline-block";
+              nextBtn.classList.remove("hidden");
+              nextBtn.classList.add("fade-in");
+              nextBtn.setAttribute("aria-hidden", "false");
+            } else {
+              // hide
+              nextBtn.classList.remove("fade-in");
+              nextBtn.classList.add("hidden");
+              nextBtn.setAttribute("aria-hidden", "true");
+              setTimeout(() => {
+                if (!nextBtn.classList.contains("fade-in"))
+                  nextBtn.style.display = "none";
+              }, 200);
+            }
+          }
+          return allOk;
+        }
+
+        // message helper: show a small temporary message under controls
+        showMsg(text, ms = 1400) {
+          const el = document.getElementById("msg");
+          el.textContent = text;
+          setTimeout(() => {
+            if (el.textContent === text) el.textContent = "";
+          }, ms);
+        }
+
+        // Save a letter to localStorage and trigger active word validation
+        saveLetter(r, c, ch) {
+          const cur =
+            this.loadProgress() ||
+            Array.from({ length: ROWS }, () => Array(COLS).fill(""));
+          cur[r][c] = ch;
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(cur));
+          } catch (e) {
+            /* ignore */
+          }
+          this.checkActiveWordOnCompletion(); // auto-validate the active word if complete
+        }
+
+        // load persisted progress (if any)
+        loadProgress() {
+          try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (!raw) return null;
+            return JSON.parse(raw);
+          } catch (e) {
+            return null;
+          }
+        }
+      } // End scene
+
+      /* -------------------------
+         Phaser config & boot
+         ------------------------- */
+      const config = {
+        type: Phaser.AUTO,
+        parent: "game",
+        width: window.innerWidth < 500 ? 360 : 700,
+        height: window.innerWidth < 500 ? 440 : 560,
+        backgroundColor: "#06121a",
+        scene: [CrosswordScene],
+        scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+      };
+      const game = new Phaser.Game(config);
+
+      /* -------------------------
+         Minimal DOM wiring
+         ------------------------- */
+      window.addEventListener("load", () => {
+        // Toggle direction button
+        document
+          .getElementById("toggleDir")
+          .addEventListener("click", () =>
+            window.crosswordScene.toggleDirection()
+          );
+        // Continue button action (customize)
+        const nextBtn = document.getElementById("nextBtn");
+        if (nextBtn)
+          nextBtn.addEventListener("click", () => {
+            alert("Puzzle solved! Continue action here.");
+          });
+        // Populate clue lists (calls into scene methods)
+        populateLists();
+      });
+
+      // Build the across/down lists for the UI (kept simple)
+      function populateLists() {
+        const aList = document.getElementById("acrossList"),
+          dList = document.getElementById("downList");
+        aList.innerHTML = "";
+        dList.innerHTML = "";
+        Object.keys(acrossClues)
+          .sort((a, b) => a - b)
+          .forEach((id) => {
+            const cl = acrossClues[id];
+            const li = document.createElement("li");
+            li.dataset.id = id;
+            li.textContent = `${id}. ${cl.clue} (${cl.len})`;
+            li.addEventListener("click", () => {
+              window.crosswordScene.direction = "across";
+              window.crosswordScene.selectCell(cl.r, cl.c);
+            });
+            aList.appendChild(li);
+          });
+        Object.keys(downClues)
+          .sort((a, b) => a - b)
+          .forEach((id) => {
+            const cl = downClues[id];
+            const li = document.createElement("li");
+            li.dataset.id = id;
+            li.textContent = `${id}. ${cl.clue} (${cl.len})`;
+            li.addEventListener("click", () => {
+              window.crosswordScene.direction = "down";
+              window.crosswordScene.selectCell(cl.r, cl.c);
+            });
+            dList.appendChild(li);
+          });
+      }
+    </script>
+  </body>
+</html>
